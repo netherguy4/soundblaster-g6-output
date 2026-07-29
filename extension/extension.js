@@ -45,6 +45,9 @@ class G6Indicator extends PanelMenu.Button {
         this._refreshTimer = 0;
         this._busy = false;
         this._output = null;
+        this._usingGestures = false;
+
+        this._setupClickHandling();
 
         this._icon = new St.Icon({
             icon_name: FALLBACK_ICON,
@@ -85,7 +88,34 @@ class G6Indicator extends PanelMenu.Button {
 
     // Left click switches straight away; the menu, which only offers the two
     // explicit choices, moves to the right button.
+    //
+    // GNOME 50 routes panel clicks through Clutter.ClickGesture, so overriding
+    // vfunc_event there has no effect at all — the inherited gesture claims the
+    // press first. Older versions still use vfunc_event, hence the two paths.
+    _setupClickHandling() {
+        if (!this._clickGesture || !Clutter.ClickGesture)
+            return;
+
+        // Restrict the inherited menu gesture to the right button...
+        this._clickGesture.set_required_button(Clutter.BUTTON_SECONDARY);
+
+        // ...and give the left one a gesture of its own. Two click gestures on
+        // one actor, separated by required_button, is the shell's own pattern
+        // (see backgroundMenu.js).
+        this._toggleGesture = new Clutter.ClickGesture({
+            required_button: Clutter.BUTTON_PRIMARY,
+            recognize_on_press: true,
+        });
+        this._toggleGesture.connect('recognize', () => this._toggleOutput());
+        this.add_action(this._toggleGesture);
+
+        this._usingGestures = true;
+    }
+
     vfunc_event(event) {
+        if (this._usingGestures)
+            return super.vfunc_event(event);
+
         if (event.type() === Clutter.EventType.BUTTON_PRESS) {
             switch (event.get_button()) {
             case Clutter.BUTTON_PRIMARY:
@@ -155,6 +185,9 @@ class G6Indicator extends PanelMenu.Button {
     _toggleOutput() {
         if (this._busy)
             return;
+
+        // Keep the two interactions from overlapping mid-animation.
+        this.menu.close();
 
         this._busy = true;
         this._setItemsSensitive(false);
@@ -264,6 +297,9 @@ class G6Indicator extends PanelMenu.Button {
             this.menu.disconnect(this._openStateId);
             this._openStateId = 0;
         }
+
+        // The action itself is owned by the actor and goes with it.
+        this._toggleGesture = null;
 
         this._cancellable?.cancel();
         this._cancellable = null;

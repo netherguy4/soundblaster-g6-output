@@ -40,7 +40,10 @@ ${XDG_STATE_HOME:-~/.local/state}/g6-output/output
 
 Тонкий UI-адаптер GNOME Shell:
 
-- создаёт panel indicator: левый клик — `toggle`, правый — меню;
+- создаёт panel indicator: левый клик — `toggle`, правый — меню. На GNOME 50
+  это делается двумя `Clutter.ClickGesture` с разным `required_button`, потому
+  что `PanelMenu.Button` там перехватывает нажатие жестом, а не `vfunc_event`;
+  для GNOME 48–49 оставлена ветка на `vfunc_event`;
 - скрывает индикатор при `disconnected` и показывает при подключении;
 - следит за hidraw через `GUdev.Client`; события отфильтрованы по
   `ID_VENDOR_ID`, склеены debounce 300 мс, а подключение получает две
