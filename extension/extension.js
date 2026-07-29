@@ -89,9 +89,10 @@ class G6Indicator extends PanelMenu.Button {
     // Left click switches straight away; the menu, which only offers the two
     // explicit choices, moves to the right button.
     //
-    // GNOME 50 routes panel clicks through Clutter.ClickGesture, so overriding
-    // vfunc_event there has no effect at all — the inherited gesture claims the
-    // press first. Older versions still use vfunc_event, hence the two paths.
+    // GNOME 50 routes panel clicks through Clutter.ClickGesture. vfunc_event
+    // still runs for events reaching the actor, but the gesture claims the
+    // press first, so an override there never sees the click. Older versions
+    // have no ClickGesture and do use vfunc_event, hence the two paths.
     _setupClickHandling() {
         if (!this._clickGesture || !Clutter.ClickGesture)
             return;
@@ -112,9 +113,14 @@ class G6Indicator extends PanelMenu.Button {
         this._usingGestures = true;
     }
 
+    // Never chain to super here: St.Widget has no `event` implementation to
+    // chain to, and doing so throws on every event that reaches the actor.
+    // Declining an event by returning EVENT_PROPAGATE is the correct handling,
+    // and the parent's own vfunc_event did nothing but toggle the menu on
+    // press, which this replaces outright.
     vfunc_event(event) {
         if (this._usingGestures)
-            return super.vfunc_event(event);
+            return Clutter.EVENT_PROPAGATE;
 
         if (event.type() === Clutter.EventType.BUTTON_PRESS) {
             switch (event.get_button()) {
@@ -135,7 +141,7 @@ class G6Indicator extends PanelMenu.Button {
             return Clutter.EVENT_STOP;
         }
 
-        return super.vfunc_event(event);
+        return Clutter.EVENT_PROPAGATE;
     }
 
     _setVisible(visible) {
