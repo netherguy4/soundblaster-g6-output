@@ -190,15 +190,12 @@ class G6Indicator extends PanelMenu.Button {
         this.menu.close();
 
         this._busy = true;
-        this._setItemsSensitive(false);
 
         this._run(['toggle'], (stdout) => {
             this._applyStatus(stdout.trim());
             this._busy = false;
-            this._setItemsSensitive(true);
         }, true, () => {
             this._busy = false;
-            this._setItemsSensitive(true);
             this._refreshFromDevice();
         });
     }
@@ -208,15 +205,12 @@ class G6Indicator extends PanelMenu.Button {
             return;
 
         this._busy = true;
-        this._setItemsSensitive(false);
 
         this._run(['set', output], () => {
             this._applyStatus(output);
             this._busy = false;
-            this._setItemsSensitive(true);
         }, true, () => {
             this._busy = false;
-            this._setItemsSensitive(true);
             this._refreshFromDevice();
         });
     }
@@ -274,11 +268,6 @@ class G6Indicator extends PanelMenu.Button {
         this._setVisible(true);
         this._output = Object.hasOwn(OUTPUTS, status) ? status : null;
         this._icon.icon_name = this._output ? OUTPUTS[this._output].icon : FALLBACK_ICON;
-    }
-
-    _setItemsSensitive(sensitive) {
-        this._headphonesItem.setSensitive(sensitive);
-        this._speakersItem.setSensitive(sensitive);
     }
 
     destroy() {
