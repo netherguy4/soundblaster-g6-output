@@ -1,0 +1,2 @@
+# Sound BlasterX G6 HID control interface
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3256", TAG+="uaccess"

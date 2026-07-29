@@ -1,0 +1,20 @@
+[package]
+name = "g6-output"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal Sound BlasterX G6 output switcher for Linux"
+license = "MIT"
+repository = "https://github.com/netherguy4/soundblaster-g6-output"
+
+[dependencies]
+# linux-native-basic-udev is the pure-Rust backend: it enumerates via sysfs and
+# needs neither libudev nor a C toolchain, so the crate builds on immutable
+# hosts such as Bluefin. The neighbouring `linux-native` feature is NOT
+# equivalent — it pulls the `udev` crate, which links against libudev.
+hidapi = { version = "=2.6.6", default-features = false, features = ["linux-native-basic-udev"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
