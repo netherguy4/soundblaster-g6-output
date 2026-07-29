@@ -40,7 +40,11 @@ ${XDG_STATE_HOME:-~/.local/state}/g6-output/output
 
 Тонкий UI-адаптер GNOME Shell:
 
-- создаёт panel indicator;
+- создаёт panel indicator: левый клик — `toggle`, правый — меню;
+- скрывает индикатор при `disconnected` и показывает при подключении;
+- следит за hidraw через `GUdev.Client`; события отфильтрованы по
+  `ID_VENDOR_ID`, склеены debounce 300 мс, а подключение получает две
+  дополнительные попытки, потому что перечисление отстаёт от uevent;
 - запускает `~/.local/bin/g6-output` через `Gio.Subprocess`;
 - не блокирует main loop;
 - обновляет UI только после exit code `0`;

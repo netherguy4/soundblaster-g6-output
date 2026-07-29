@@ -1,6 +1,8 @@
+import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import GUdev from 'gi://GUdev';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -15,11 +17,23 @@ const OUTPUTS = {
     },
     speakers: {
         label: 'Speakers',
-        icon: 'audio-speakers-symbolic',
+        icon: 'audio-volume-high-symbolic',
     },
 };
 
-const DEFAULT_ICON = 'audio-card-symbolic';
+const FALLBACK_ICON = 'audio-card-symbolic';
+
+const G6_VENDOR_ID = '041e';
+
+// Coalesces the burst of uevents a multi-interface device emits, and gives
+// systemd's uaccess rule time to apply the ACL before the first query.
+const UEVENT_DEBOUNCE_MS = 300;
+
+// A freshly plugged device is not always enumerable the instant udev announces
+// it, so a connect gets a couple of extra chances. A removal is final and takes
+// effect immediately.
+const UEVENT_RETRY_MS = 400;
+const CONNECT_RETRIES = 2;
 
 const G6Indicator = GObject.registerClass(
 class G6Indicator extends PanelMenu.Button {
@@ -28,21 +42,15 @@ class G6Indicator extends PanelMenu.Button {
 
         this._binaryPath = binaryPath;
         this._cancellable = new Gio.Cancellable();
+        this._refreshTimer = 0;
         this._busy = false;
         this._output = null;
-        this._detail = 'unknown';
 
         this._icon = new St.Icon({
-            icon_name: DEFAULT_ICON,
+            icon_name: FALLBACK_ICON,
             style_class: 'system-status-icon',
         });
         this.add_child(this._icon);
-
-        this._statusItem = new PopupMenu.PopupMenuItem('Output: unknown', {
-            reactive: false,
-        });
-        this.menu.addMenuItem(this._statusItem);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         this._headphonesItem = this._createOutputItem('headphones');
         this._speakersItem = this._createOutputItem('speakers');
@@ -50,12 +58,20 @@ class G6Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._headphonesItem);
         this.menu.addMenuItem(this._speakersItem);
 
-        // Refresh whenever the menu opens, so a switch made outside this
-        // extension is picked up instead of showing a stale label.
+        // Hidden until the device is known to be present, so the panel stays
+        // clean when the G6 is unplugged.
+        this._setVisible(false);
+
+        // Opening the menu re-reads the device, so a switch made by other
+        // software shows up without waiting for a uevent.
         this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen && !this._busy)
                 this._refreshFromDevice();
         });
+
+        this._udevClient = new GUdev.Client({subsystems: ['hidraw']});
+        this._ueventId = this._udevClient.connect('uevent',
+            (client, action, device) => this._onUevent(action, device));
 
         this._refreshFromDevice();
     }
@@ -67,10 +83,91 @@ class G6Indicator extends PanelMenu.Button {
         return item;
     }
 
-    _refreshFromDevice() {
+    // Left click switches straight away; the menu, which only offers the two
+    // explicit choices, moves to the right button.
+    vfunc_event(event) {
+        if (event.type() === Clutter.EventType.BUTTON_PRESS) {
+            switch (event.get_button()) {
+            case Clutter.BUTTON_PRIMARY:
+                this._toggleOutput();
+                return Clutter.EVENT_STOP;
+            case Clutter.BUTTON_SECONDARY:
+                this.menu.toggle();
+                return Clutter.EVENT_STOP;
+            default:
+                break;
+            }
+        }
+
+        // Touch has no secondary button, so keep the menu reachable there.
+        if (event.type() === Clutter.EventType.TOUCH_BEGIN) {
+            this.menu.toggle();
+            return Clutter.EVENT_STOP;
+        }
+
+        return super.vfunc_event(event);
+    }
+
+    _setVisible(visible) {
+        this.visible = visible;
+        // PanelMenu.ButtonBox wraps the actor in a container; keep both in sync
+        // so hiding works whether or not the version binds them together.
+        if (this.container)
+            this.container.visible = visible;
+    }
+
+    _onUevent(action, device) {
+        // Removals can arrive with a stripped property set, so any hidraw
+        // removal is worth re-checking; adds and changes carry the vendor and
+        // are filtered on it to avoid reacting to every other HID device.
+        if (action !== 'remove' && device.get_property('ID_VENDOR_ID') !== G6_VENDOR_ID)
+            return;
+
+        this._scheduleRefresh(action === 'remove' ? 0 : CONNECT_RETRIES);
+    }
+
+    _scheduleRefresh(retries = 0, delay = UEVENT_DEBOUNCE_MS) {
+        if (this._refreshTimer)
+            GLib.Source.remove(this._refreshTimer);
+
+        this._refreshTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._refreshTimer = 0;
+            this._refreshFromDevice(retries);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _refreshFromDevice(retries = 0) {
         this._run(['status'], (stdout) => {
-            this._applyStatus(stdout.trim(), false);
+            const status = stdout.trim();
+
+            if (status === 'disconnected' && retries > 0) {
+                this._scheduleRefresh(retries - 1, UEVENT_RETRY_MS);
+                return;
+            }
+
+            this._applyStatus(status);
         }, false);
+    }
+
+    // `toggle` reads the device before switching, so it never acts on a stale
+    // guess even if something else changed the output.
+    _toggleOutput() {
+        if (this._busy)
+            return;
+
+        this._busy = true;
+        this._setItemsSensitive(false);
+
+        this._run(['toggle'], (stdout) => {
+            this._applyStatus(stdout.trim());
+            this._busy = false;
+            this._setItemsSensitive(true);
+        }, true, () => {
+            this._busy = false;
+            this._setItemsSensitive(true);
+            this._refreshFromDevice();
+        });
     }
 
     _setOutput(output) {
@@ -79,16 +176,15 @@ class G6Indicator extends PanelMenu.Button {
 
         this._busy = true;
         this._setItemsSensitive(false);
-        this._statusItem.label.text = `Switching to ${OUTPUTS[output].label}…`;
 
         this._run(['set', output], () => {
-            this._applyStatus(output, true);
+            this._applyStatus(output);
             this._busy = false;
             this._setItemsSensitive(true);
         }, true, () => {
             this._busy = false;
             this._setItemsSensitive(true);
-            this._refreshStatusLabel();
+            this._refreshFromDevice();
         });
     }
 
@@ -131,27 +227,20 @@ class G6Indicator extends PanelMenu.Button {
         });
     }
 
-    // `status` also reports `disconnected` and `unknown`, which have no icon of
-    // their own but must still produce a truthful label.
-    _applyStatus(status, notify) {
-        this._output = Object.hasOwn(OUTPUTS, status) ? status : null;
-        this._detail = status;
-        this._icon.icon_name = this._output ? OUTPUTS[this._output].icon : DEFAULT_ICON;
-        this._refreshStatusLabel();
-
-        if (notify && this._output)
-            Main.notify('Sound Blaster G6', `Output: ${OUTPUTS[this._output].label}`);
-    }
-
-    _refreshStatusLabel() {
-        if (this._output) {
-            this._statusItem.label.text = `Output: ${OUTPUTS[this._output].label}`;
+    // `status` reports `headphones`, `speakers`, `disconnected` or `unknown`.
+    // Success is conveyed by the panel icon alone; only failures interrupt.
+    _applyStatus(status) {
+        if (status === 'disconnected') {
+            this._output = null;
+            this._icon.icon_name = FALLBACK_ICON;
+            this.menu.close();
+            this._setVisible(false);
             return;
         }
 
-        this._statusItem.label.text = this._detail === 'disconnected'
-            ? 'Device disconnected'
-            : 'Output: unknown';
+        this._setVisible(true);
+        this._output = Object.hasOwn(OUTPUTS, status) ? status : null;
+        this._icon.icon_name = this._output ? OUTPUTS[this._output].icon : FALLBACK_ICON;
     }
 
     _setItemsSensitive(sensitive) {
@@ -160,9 +249,20 @@ class G6Indicator extends PanelMenu.Button {
     }
 
     destroy() {
+        if (this._refreshTimer) {
+            GLib.Source.remove(this._refreshTimer);
+            this._refreshTimer = 0;
+        }
+
+        if (this._ueventId) {
+            this._udevClient.disconnect(this._ueventId);
+            this._ueventId = 0;
+        }
+        this._udevClient = null;
+
         if (this._openStateId) {
             this.menu.disconnect(this._openStateId);
-            this._openStateId = null;
+            this._openStateId = 0;
         }
 
         this._cancellable?.cancel();

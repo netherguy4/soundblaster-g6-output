@@ -1,7 +1,7 @@
 {
   "uuid": "soundblaster-g6-output@netherg.io",
   "name": "Sound Blaster G6 Output",
-  "description": "Switch Sound BlasterX G6 between headphones and speakers.",
+  "description": "Switch Sound BlasterX G6 between headphones and speakers. Left click toggles, right click opens the menu.",
   "shell-version": ["48", "49", "50"],
   "version": 1,
   "url": "https://github.com/netherguy4/soundblaster-g6-output"
