@@ -31,6 +31,8 @@ rm -rf "${EXTENSION_DIR}"
 
 log "Removing CLI and state"
 rm -f "${BINARY}"
+# Leftover from an install.sh interrupted between install and rename.
+rm -f "$(dirname -- "${BINARY}")/.g6-output.new"
 rm -rf "${STATE_DIR}"
 
 if [[ -e "${RULE_DEST}" ]]; then
