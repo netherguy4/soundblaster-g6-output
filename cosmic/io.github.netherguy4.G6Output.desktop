@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sound Blaster G6 Output
+Name[ru]=Выход Sound Blaster G6
+Exec=g6-output-cosmic
+Icon=sound-blasterx-g6
+NoDisplay=true
+X-CosmicApplet=true

@@ -161,7 +161,7 @@ Firmware:     не опрашивалась (способ получения н�
 - публикация в GNOME Extensions;
 - поддержка нескольких устройств;
 - поддержка других Sound Blaster моделей;
-- SBX, Scout Mode, EQ, Direct Mode, gain, mixer и firmware-функции.
+- SBX, Scout Mode, EQ, gain, mixer и firmware-функции.
 
 ## Что в ближайших планах
 

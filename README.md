@@ -14,6 +14,8 @@ Sound BlasterX G6 между **наушниками** и **динамиками*
 
 Документация для передачи проекта разработчику или AI-агенту: [HANDOFF.md](HANDOFF.md).
 
+COSMIC 1.8 panel frontend: [cosmic/README.md](cosmic/README.md). It reuses the installed CLI and udev rule; left-click toggles the output and right-click opens explicit choices.
+
 ## Что входит в MVP
 
 - значок Sound Blaster G6 в верхней панели GNOME;
@@ -82,6 +84,7 @@ cargo build --release
 g6-output set headphones
 g6-output set speakers
 g6-output toggle
+g6-output direct [on|off|toggle]
 g6-output status
 g6-output doctor
 ```
@@ -96,6 +99,10 @@ g6-output doctor
 
 Каждая команда `set` подтверждается ответом устройства: если G6 применил не тот
 режим, команда завершается ошибкой вместо ложного успеха.
+
+`direct` без аргумента печатает `on` или `off`. Переключение Direct Mode
+отключает SBX и открывает частоты 44.1–384 kHz; G6 при этом переподключается
+по USB (~2.5 с), и команда ждёт подтверждения от устройства до 15 с.
 
 ## Удаление
 

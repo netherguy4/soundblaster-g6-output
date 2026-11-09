@@ -1,0 +1,16 @@
+[package]
+name = "g6-output-cosmic"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["applet", "dbus-config", "a11y"] }
+tokio = { version = "1", features = ["process", "time"] }
+
+[profile.release]
+strip = true
+debug = 0
+
+[profile.dev]
+debug = 0

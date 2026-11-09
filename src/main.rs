@@ -31,6 +31,18 @@ const REPLY_COMMAND: usize = 1;
 const REPLY_MODE: usize = 4;
 const REPLY_MIN_LEN: usize = 5;
 
+/// Direct Mode (`0x39`, parameter `0x05`). Verified on firmware bcdDevice 20.14:
+/// `5a 39 03 00 05 <0|1>` switches it, `5a 39 03 01 05 00` reads it back as
+/// `5a 39 05 01 <0x20 on | 0x00 off>`. A switch makes the G6 re-enumerate on
+/// USB, so the write gets no reply and the state is read after it reconnects.
+const CMD_DIRECT: u8 = 0x39;
+const DIRECT_LENGTH: u8 = 0x03;
+const DIRECT_PARAM: u8 = 0x05;
+const DIRECT_REPLY_STATE: usize = 4;
+const DIRECT_ON_FLAG: u8 = 0x20;
+const DIRECT_DEADLINE: Duration = Duration::from_secs(15);
+const DIRECT_RETRY: Duration = Duration::from_millis(500);
+
 const READ_POLL_MS: i32 = 250;
 const REPLY_DEADLINE: Duration = Duration::from_millis(1000);
 
@@ -95,6 +107,7 @@ enum AppError {
     NoReply,
     UnknownDeviceMode(u8),
     NotApplied { requested: Output, actual: Output },
+    DirectNotApplied(bool),
     State(String),
     Usage(String),
 }
@@ -134,6 +147,12 @@ impl fmt::Display for AppError {
                 "the device rejected the command: requested {}, but it reports {}",
                 requested.as_str(),
                 actual.as_str()
+            ),
+            Self::DirectNotApplied(on) => write!(
+                formatter,
+                "Direct Mode did not turn {} within {} s",
+                on_off(*on),
+                DIRECT_DEADLINE.as_secs()
             ),
             Self::State(message) => write!(formatter, "failed to update local state: {message}"),
             Self::Usage(message) => write!(formatter, "{message}"),
@@ -183,6 +202,24 @@ fn run(arguments: Vec<String>) -> Result<(), AppError> {
             set_output(next)?;
             println!("{}", next.as_str());
         }
+        "direct" => {
+            let on = match arguments.get(1).map(String::as_str) {
+                None => {
+                    println!("{}", on_off(query_direct()?));
+                    return Ok(());
+                }
+                Some("on") => true,
+                Some("off") => false,
+                Some("toggle") => !query_direct()?,
+                Some(other) => {
+                    return Err(AppError::Usage(format!(
+                        "unknown Direct Mode value '{other}'; expected 'on', 'off' or 'toggle'"
+                    )))
+                }
+            };
+            set_direct(on)?;
+            println!("{}", on_off(on));
+        }
         "status" => println!("{}", status_line()),
         "doctor" => doctor()?,
         "--version" | "-V" | "version" => println!("g6-output {}", env!("CARGO_PKG_VERSION")),
@@ -206,6 +243,7 @@ fn print_help() {
            g6-output headphones\n\
            g6-output speakers\n\
            g6-output toggle\n\
+           g6-output direct [on|off|toggle]\n\
            g6-output status\n\
            g6-output doctor\n",
         version = env!("CARGO_PKG_VERSION")
@@ -256,6 +294,73 @@ fn query_output() -> Result<Output, AppError> {
     let device = open_control_interface()?;
     write_packet(&device, &output_packet(SELECTOR_READ, 0x00))?;
     read_output_reply(&device)
+}
+
+const fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+fn direct_packet(selector: u8, value: u8) -> [u8; REPORT_SIZE] {
+    let mut packet = [0_u8; REPORT_SIZE];
+    packet[1] = PAYLOAD_PREFIX;
+    packet[2] = CMD_DIRECT;
+    packet[3] = DIRECT_LENGTH;
+    packet[4] = selector;
+    packet[5] = DIRECT_PARAM;
+    packet[6] = value;
+    packet
+}
+
+fn read_direct_reply(device: &HidDevice) -> Result<bool, AppError> {
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    let mut buffer = [0_u8; PAYLOAD_SIZE];
+    while Instant::now() < deadline {
+        let length = device
+            .read_timeout(&mut buffer, READ_POLL_MS)
+            .map_err(|error| AppError::DeviceRead(error.to_string()))?;
+        // Selector 0x01 tells the read reply apart from other 0x39 frames.
+        if length > DIRECT_REPLY_STATE
+            && buffer[REPLY_PREFIX] == PAYLOAD_PREFIX
+            && buffer[REPLY_COMMAND] == CMD_DIRECT
+            && buffer[3] == SELECTOR_READ
+        {
+            return Ok(buffer[DIRECT_REPLY_STATE] & DIRECT_ON_FLAG != 0);
+        }
+    }
+    Err(AppError::NoReply)
+}
+
+fn query_direct_on(device: &HidDevice) -> Result<bool, AppError> {
+    write_packet(device, &direct_packet(SELECTOR_READ, 0x00))?;
+    read_direct_reply(device)
+}
+
+fn query_direct() -> Result<bool, AppError> {
+    query_direct_on(&open_control_interface()?)
+}
+
+fn set_direct(on: bool) -> Result<(), AppError> {
+    let device = open_control_interface()?;
+    if query_direct_on(&device)? == on {
+        // Writing the current value would still reset the device and cut audio.
+        return Ok(());
+    }
+    write_packet(&device, &direct_packet(SELECTOR_WRITE, u8::from(on)))?;
+    drop(device);
+
+    let deadline = Instant::now() + DIRECT_DEADLINE;
+    while Instant::now() < deadline {
+        std::thread::sleep(DIRECT_RETRY);
+        // Errors are expected while the G6 is off the bus; keep retrying.
+        if query_direct().is_ok_and(|state| state == on) {
+            return Ok(());
+        }
+    }
+    Err(AppError::DirectNotApplied(on))
 }
 
 fn find_device(api: &HidApi) -> Option<&DeviceInfo> {
@@ -346,6 +451,11 @@ fn doctor() -> Result<(), AppError> {
     match read_output_reply(&device) {
         Ok(output) => println!("  device:    {}", output.as_str()),
         Err(error) => println!("  device:    query failed ({error})"),
+    }
+
+    match query_direct_on(&device) {
+        Ok(on) => println!("  direct:    {}", on_off(on)),
+        Err(error) => println!("  direct:    query failed ({error})"),
     }
 
     println!(
@@ -462,6 +572,18 @@ mod tests {
             &[0x00, 0x5a, 0x2c, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00]
         );
         assert!(packet[9..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn builds_direct_packets() {
+        assert_eq!(
+            &direct_packet(SELECTOR_WRITE, 1)[..8],
+            &[0x00, 0x5a, 0x39, 0x03, 0x00, 0x05, 0x01, 0x00]
+        );
+        assert_eq!(
+            &direct_packet(SELECTOR_READ, 0)[..8],
+            &[0x00, 0x5a, 0x39, 0x03, 0x01, 0x05, 0x00, 0x00]
+        );
     }
 
     #[test]
